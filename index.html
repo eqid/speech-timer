@@ -24,7 +24,7 @@
     <!-- 標題 -->
     <header class="text-center mb-6">
       <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-emerald-400">語音提醒定時器</h1>
-      <p class="text-xs text-slate-400 mt-1">支援分秒自訂排程與存檔</p>
+      <p class="text-xs text-slate-400 mt-1">內建防休眠常亮鎖定 · 時間精準校正 · 語音背景播放防凍結</p>
     </header>
 
     <!-- 計時器主顯示區 -->
@@ -32,8 +32,13 @@
       <div id="timerDisplay" class="text-6xl md:text-7xl font-mono font-bold tracking-widest text-emerald-400 mb-2">
         30:00
       </div>
-      <div id="statusBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400">
-        準備中
+      <div class="flex items-center gap-2">
+        <div id="statusBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400">
+          準備中
+        </div>
+        <div id="wakeLockBadge" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-500">
+          螢幕常亮：關閉
+        </div>
       </div>
     </div>
 
@@ -50,7 +55,7 @@
       </button>
     </div>
 
-    <!-- 語音引擎狀態指示列（鎖定 Google 國語（台灣）） -->
+    <!-- 語音引擎狀態指示列 -->
     <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/80 mb-6 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -167,12 +172,22 @@
     let reminders = [];
     let googleVoiceTW = null;
 
+    // 行動端關鍵變數：時間戳追蹤與螢幕常亮鎖
+    let startTimeMs = 0;
+    let durationAtStartSec = 0;
+    let wakeLock = null;
+    let silentAudioEl = null;
+
     window.onload = () => {
       loadAutoSavedData();
       renderPresetDropdown();
       updateDisplay();
       renderReminders();
       bindGoogleVoiceTW();
+      initSilentAudio();
+
+      // 當使用者切回瀏覽器或喚醒螢幕時，自動重新綁定常亮鎖並校正時間
+      document.addEventListener('visibilitychange', handleVisibilityChange);
     };
 
     function formatTime(totalSec) {
@@ -188,7 +203,71 @@
       setTimeout(() => toast.classList.add('hidden'), 1800);
     }
 
-    // --- Google 國語（台灣）專用精準篩選模組 ---
+    // --- 防休眠技術 1：Screen Wake Lock API ---
+    async function requestWakeLock() {
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          updateWakeLockUI(true);
+          wakeLock.addEventListener('release', () => {
+            updateWakeLockUI(false);
+          });
+        } catch (err) {
+          console.warn('Wake Lock 啟動失敗:', err);
+          updateWakeLockUI(false);
+        }
+      }
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock !== null) {
+        wakeLock.release().then(() => {
+          wakeLock = null;
+          updateWakeLockUI(false);
+        });
+      }
+    }
+
+    function updateWakeLockUI(active) {
+      const el = document.getElementById('wakeLockBadge');
+      if (active) {
+        el.innerText = '螢幕常亮：已啟用';
+        el.className = 'text-xs px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+      } else {
+        el.innerText = '螢幕常亮：關閉';
+        el.className = 'text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-500';
+      }
+    }
+
+    async function handleVisibilityChange() {
+      if (document.visibilityState === 'visible' && isRunning) {
+        // 頁面返回前台，重新申請常亮鎖
+        await requestWakeLock();
+        // 立即透過時間戳補正秒數，防止背景執行期間計時器被系統節流延遲
+        syncWithTimestamp();
+      }
+    }
+
+    // --- 防休眠技術 2：無聲音軌背景保活（Audio Keep-Alive） ---
+    function initSilentAudio() {
+      // 產生一段極短的 Base64 無聲 WAV 檔案
+      silentAudioEl = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+      silentAudioEl.loop = true;
+    }
+
+    function playSilentAudio() {
+      if (silentAudioEl) {
+        silentAudioEl.play().catch(e => console.log('音訊自動播放等待觸發', e));
+      }
+    }
+
+    function pauseSilentAudio() {
+      if (silentAudioEl) {
+        silentAudioEl.pause();
+      }
+    }
+
+    // --- Google 國語（台灣）語音模組 ---
     function bindGoogleVoiceTW() {
       if (!('speechSynthesis' in window)) {
         document.getElementById('voiceEngineStatus').innerText = "瀏覽器不支援語音";
@@ -199,19 +278,16 @@
         const voices = window.speechSynthesis.getVoices();
         if (!voices || voices.length === 0) return;
 
-        // 優先度 1：明確名稱包含 Google 與「國語」或「台灣/臺灣/TW」
         googleVoiceTW = voices.find(v => 
           v.name.includes("Google") && (v.name.includes("國語") || v.name.includes("台灣") || v.name.includes("臺灣"))
         );
 
-        // 優先度 2：Google 引擎且語言標籤為台灣繁中 (zh-TW, cmn-TW, zh_TW)
         if (!googleVoiceTW) {
           googleVoiceTW = voices.find(v => 
             v.name.includes("Google") && /(zh|cmn)[-_]TW/i.test(v.lang)
           );
         }
 
-        // 優先度 3：非 Chrome 環境或未含 Google 字樣時，回退到系統原生 zh-TW 繁中語音
         if (!googleVoiceTW) {
           googleVoiceTW = voices.find(v => /(zh|cmn)[-_]TW/i.test(v.lang));
         }
@@ -230,15 +306,24 @@
       }
     }
 
+    function unlockAudio() {
+      if (!('speechSynthesis' in window)) return;
+      const silentUtterance = new SpeechSynthesisUtterance(' ');
+      silentUtterance.volume = 0;
+      silentUtterance.rate = 10;
+      window.speechSynthesis.speak(silentUtterance);
+
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    }
+
     function testVoice() {
       speakText("您好，這是 Google 國語（台灣）提醒語音。");
     }
 
     function speakText(text) {
-      if (!('speechSynthesis' in window)) {
-        alert("您的瀏覽器不支援語音合成功能");
-        return;
-      }
+      if (!('speechSynthesis' in window)) return;
 
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -255,8 +340,214 @@
       window.speechSynthesis.speak(utterance);
     }
 
-    // --- 存檔與計時邏輯 ---
+    // --- 核心計時邏輯（加入時間戳真實校正） ---
 
+    function syncWithTimestamp() {
+      const now = Date.now();
+      const elapsedSec = Math.floor((now - startTimeMs) / 1000);
+      const newRemaining = Math.max(0, durationAtStartSec - elapsedSec);
+
+      // 檢查在背景期間是否錯過了語音提醒點
+      reminders.forEach(r => {
+        if (!r.triggered && remainingSeconds >= r.targetSeconds && newRemaining <= r.targetSeconds) {
+          r.triggered = true;
+          speakText(r.text);
+        }
+      });
+
+      remainingSeconds = newRemaining;
+      updateDisplay();
+      renderReminders();
+
+      if (remainingSeconds === 0) {
+        onTimerComplete();
+      }
+    }
+
+    function startTimer() {
+      if (isRunning) return;
+
+      unlockAudio();
+      playSilentAudio();
+      requestWakeLock();
+
+      isRunning = true;
+      startTimeMs = Date.now();
+      durationAtStartSec = remainingSeconds;
+
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('startBtn').classList.add('opacity-40');
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('statusBadge').innerText = "計時中...";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+
+      timerId = setInterval(() => {
+        syncWithTimestamp();
+      }, 500); // 採 500ms 輪詢更新以確保顯示流暢
+    }
+
+    function onTimerComplete() {
+      clearInterval(timerId);
+      isRunning = false;
+      releaseWakeLock();
+      pauseSilentAudio();
+
+      document.getElementById('statusBadge').innerText = "計時已完成！";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30";
+      speakText("計時已結束！");
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('startBtn').classList.remove('opacity-40');
+      document.getElementById('pauseBtn').disabled = true;
+    }
+
+    function pauseTimer() {
+      if (!isRunning) return;
+      clearInterval(timerId);
+      isRunning = false;
+      releaseWakeLock();
+      pauseSilentAudio();
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('startBtn').classList.remove('opacity-40');
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('statusBadge').innerText = "已暫停";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30";
+    }
+
+    function resetTimer() {
+      clearInterval(timerId);
+      isRunning = false;
+      releaseWakeLock();
+      pauseSilentAudio();
+
+      remainingSeconds = totalSeconds;
+      reminders.forEach(r => r.triggered = false);
+      updateDisplay();
+      renderReminders();
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('startBtn').classList.remove('opacity-40');
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('statusBadge').innerText = "準備中";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400";
+    }
+
+    function updateDisplay() {
+      document.getElementById('timerDisplay').innerText = formatTime(remainingSeconds);
+    }
+
+    function applyTotalTime() {
+      if (isRunning) {
+        alert("請先暫停或重設定時器後再更改總時長。");
+        return;
+      }
+      const min = parseInt(document.getElementById('totalMinInput').value, 10) || 0;
+      const sec = parseInt(document.getElementById('totalSecInput').value, 10) || 0;
+      const total = min * 60 + sec;
+
+      if (total <= 0) {
+        alert("總時長必須大於 0 秒");
+        return;
+      }
+
+      totalSeconds = total;
+      remainingSeconds = totalSeconds;
+      reminders.forEach(r => r.triggered = false);
+      renderReminders();
+      updateDisplay();
+      autoSave();
+      showToast("總時長已更新並儲存");
+    }
+
+    // --- 提醒排程管理 ---
+    function addReminder() {
+      const minInput = document.getElementById('remindMinInput');
+      const secInput = document.getElementById('remindSecInput');
+      const textInput = document.getElementById('remindTextInput');
+
+      const min = parseInt(minInput.value, 10) || 0;
+      const sec = parseInt(secInput.value, 10) || 0;
+      const text = textInput.value.trim();
+
+      if (min < 0 || sec < 0 || sec >= 60) {
+        alert("請輸入有效的時間（秒數需介於 0 至 59 之間）");
+        return;
+      }
+
+      const targetSec = min * 60 + sec;
+
+      if (targetSec > totalSeconds) {
+        alert(`提醒時間 (${formatTime(targetSec)}) 不能超過總時長 (${formatTime(totalSeconds)})！`);
+        return;
+      }
+
+      if (!text) {
+        alert("請輸入播報文字內容");
+        return;
+      }
+
+      reminders.push({
+        id: Date.now(),
+        targetSeconds: targetSec,
+        min: min,
+        sec: sec,
+        text: text,
+        triggered: remainingSeconds < targetSec
+      });
+
+      reminders.sort((a, b) => b.targetSeconds - a.targetSeconds);
+
+      minInput.value = '';
+      secInput.value = '';
+      textInput.value = '';
+      renderReminders();
+      autoSave();
+      showToast("已加入提醒並自動存檔");
+    }
+
+    function deleteReminder(id) {
+      reminders = reminders.filter(r => r.id !== id);
+      renderReminders();
+      autoSave();
+      showToast("已移除並更新存檔");
+    }
+
+    function renderReminders() {
+      const list = document.getElementById('reminderList');
+      const count = document.getElementById('reminderCount');
+      count.innerText = `${reminders.length} 個提醒`;
+
+      if (reminders.length === 0) {
+        list.innerHTML = `<li class="text-xs text-slate-500 text-center py-3 bg-slate-950/30 rounded-lg">尚無提醒項目</li>`;
+        return;
+      }
+
+      list.innerHTML = reminders.map(r => `
+        <li class="flex items-center justify-between p-2.5 rounded-lg border text-sm transition ${
+          r.triggered 
+            ? 'bg-slate-900/40 border-slate-800/80 text-slate-500 line-through' 
+            : 'bg-slate-900 border-slate-700 text-slate-200'
+        }">
+          <div class="flex items-center gap-2 overflow-hidden mr-2">
+            <span class="px-2 py-0.5 rounded text-xs font-mono font-medium ${r.triggered ? 'bg-slate-800 text-slate-500' : 'bg-emerald-500/20 text-emerald-400'}">
+              剩餘 ${formatTime(r.targetSeconds)}
+            </span>
+            <span class="truncate font-medium">${r.text}</span>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="speakText('${r.text.replace(/'/g, "\\'")}')" title="試聽語音" class="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition">
+              🔊 試聽
+            </button>
+            <button onclick="deleteReminder(${r.id})" title="刪除" class="p-1 hover:text-rose-400 text-slate-400 transition">
+              ✕
+            </button>
+          </div>
+        </li>
+      `).join('');
+    }
+
+    // --- 存檔與設定檔管理 ---
     function autoSave() {
       const data = {
         totalSeconds: totalSeconds,
@@ -369,202 +660,6 @@
         opt.innerText = name;
         select.appendChild(opt);
       });
-    }
-
-    function updateDisplay() {
-      document.getElementById('timerDisplay').innerText = formatTime(remainingSeconds);
-    }
-
-    function applyTotalTime() {
-      if (isRunning) {
-        alert("請先暫停或重設定時器後再更改總時長。");
-        return;
-      }
-      const min = parseInt(document.getElementById('totalMinInput').value, 10) || 0;
-      const sec = parseInt(document.getElementById('totalSecInput').value, 10) || 0;
-      const total = min * 60 + sec;
-
-      if (total <= 0) {
-        alert("總時長必須大於 0 秒");
-        return;
-      }
-
-      totalSeconds = total;
-      remainingSeconds = totalSeconds;
-      reminders.forEach(r => r.triggered = false);
-      renderReminders();
-      updateDisplay();
-      autoSave();
-      showToast("總時長已更新並儲存");
-    }
-
-    // 解鎖瀏覽器語音授權（送出一個 0 音量的空白發音）
-    function unlockAudio() {
-      if (!('speechSynthesis' in window)) return;
-      
-      // 建立一段空字串且音量為 0 的語音
-      const silentUtterance = new SpeechSynthesisUtterance(' ');
-      silentUtterance.volume = 0;
-      silentUtterance.rate = 10; // 極速帶過
-      window.speechSynthesis.speak(silentUtterance);
-    
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-    }
-    
-    // 修改後的開始計時函式
-    function startTimer() {
-      if (isRunning) return;
-    
-      // 1. 點擊當下立即解鎖語音引擎，避免後續倒數結束時被瀏覽器攔截
-      unlockAudio();
-    
-      isRunning = true;
-      document.getElementById('startBtn').disabled = true;
-      document.getElementById('startBtn').classList.add('opacity-40');
-      document.getElementById('pauseBtn').disabled = false;
-      document.getElementById('statusBadge').innerText = "計時中...";
-      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
-    
-      timerId = setInterval(() => {
-        if (remainingSeconds > 0) {
-          remainingSeconds--;
-          updateDisplay();
-          checkReminders();
-        } else {
-          clearInterval(timerId);
-          isRunning = false;
-          document.getElementById('statusBadge').innerText = "計時已完成！";
-          document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30";
-          speakText("計時已結束！");
-          document.getElementById('startBtn').disabled = false;
-          document.getElementById('startBtn').classList.remove('opacity-40');
-          document.getElementById('pauseBtn').disabled = true;
-        }
-      }, 1000);
-    }
-
-    function checkReminders() {
-      reminders.forEach(reminder => {
-        if (!reminder.triggered && remainingSeconds === reminder.targetSeconds) {
-          reminder.triggered = true;
-          speakText(reminder.text);
-          renderReminders();
-        }
-      });
-    }
-
-    function pauseTimer() {
-      if (!isRunning) return;
-      clearInterval(timerId);
-      isRunning = false;
-      document.getElementById('startBtn').disabled = false;
-      document.getElementById('startBtn').classList.remove('opacity-40');
-      document.getElementById('pauseBtn').disabled = true;
-      document.getElementById('statusBadge').innerText = "已暫停";
-      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30";
-    }
-
-    function resetTimer() {
-      clearInterval(timerId);
-      isRunning = false;
-      remainingSeconds = totalSeconds;
-      reminders.forEach(r => r.triggered = false);
-      updateDisplay();
-      renderReminders();
-
-      document.getElementById('startBtn').disabled = false;
-      document.getElementById('startBtn').classList.remove('opacity-40');
-      document.getElementById('pauseBtn').disabled = true;
-      document.getElementById('statusBadge').innerText = "準備中";
-      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400";
-    }
-
-    function addReminder() {
-      const minInput = document.getElementById('remindMinInput');
-      const secInput = document.getElementById('remindSecInput');
-      const textInput = document.getElementById('remindTextInput');
-
-      const min = parseInt(minInput.value, 10) || 0;
-      const sec = parseInt(secInput.value, 10) || 0;
-      const text = textInput.value.trim();
-
-      if (min < 0 || sec < 0 || sec >= 60) {
-        alert("請輸入有效的時間（秒數需介於 0 至 59 之間）");
-        return;
-      }
-
-      const targetSec = min * 60 + sec;
-
-      if (targetSec > totalSeconds) {
-        alert(`提醒時間 (${formatTime(targetSec)}) 不能超過總時長 (${formatTime(totalSeconds)})！`);
-        return;
-      }
-
-      if (!text) {
-        alert("請輸入播報文字內容");
-        return;
-      }
-
-      reminders.push({
-        id: Date.now(),
-        targetSeconds: targetSec,
-        min: min,
-        sec: sec,
-        text: text,
-        triggered: remainingSeconds < targetSec
-      });
-
-      reminders.sort((a, b) => b.targetSeconds - a.targetSeconds);
-
-      minInput.value = '';
-      secInput.value = '';
-      textInput.value = '';
-      renderReminders();
-      autoSave();
-      showToast("已加入提醒並自動存檔");
-    }
-
-    function deleteReminder(id) {
-      reminders = reminders.filter(r => r.id !== id);
-      renderReminders();
-      autoSave();
-      showToast("已移除並更新存檔");
-    }
-
-    function renderReminders() {
-      const list = document.getElementById('reminderList');
-      const count = document.getElementById('reminderCount');
-      count.innerText = `${reminders.length} 個提醒`;
-
-      if (reminders.length === 0) {
-        list.innerHTML = `<li class="text-xs text-slate-500 text-center py-3 bg-slate-950/30 rounded-lg">尚無提醒項目</li>`;
-        return;
-      }
-
-      list.innerHTML = reminders.map(r => `
-        <li class="flex items-center justify-between p-2.5 rounded-lg border text-sm transition ${
-          r.triggered 
-            ? 'bg-slate-900/40 border-slate-800/80 text-slate-500 line-through' 
-            : 'bg-slate-900 border-slate-700 text-slate-200'
-        }">
-          <div class="flex items-center gap-2 overflow-hidden mr-2">
-            <span class="px-2 py-0.5 rounded text-xs font-mono font-medium ${r.triggered ? 'bg-slate-800 text-slate-500' : 'bg-emerald-500/20 text-emerald-400'}">
-              剩餘 ${formatTime(r.targetSeconds)}
-            </span>
-            <span class="truncate font-medium">${r.text}</span>
-          </div>
-          <div class="flex items-center gap-1.5 shrink-0">
-            <button onclick="speakText('${r.text.replace(/'/g, "\\'")}')" title="試聽語音" class="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition">
-              🔊 試聽
-            </button>
-            <button onclick="deleteReminder(${r.id})" title="刪除" class="p-1 hover:text-rose-400 text-slate-400 transition">
-              ✕
-            </button>
-          </div>
-        </li>
-      `).join('');
     }
   </script>
 </body>

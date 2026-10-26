@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>語音提醒定時器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    input[type=number]::-webkit-inner-spin-button, 
+    input[type=number]::-webkit-outer-spin-button { 
+      -webkit-appearance: none; 
+      margin: 0; 
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4 md:p-8 flex flex-col items-center">
+
+  <div class="w-full max-w-xl bg-slate-800/90 backdrop-blur border border-slate-700 rounded-2xl shadow-2xl p-6 md:p-8 relative">
+    
+    <!-- 輕量提示通知 -->
+    <div id="toast" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-500 text-slate-950 px-4 py-1.5 rounded-full text-xs font-bold shadow-lg transition-all duration-300 z-50">
+      已儲存
+    </div>
+
+    <!-- 標題 -->
+    <header class="text-center mb-6">
+      <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-emerald-400">語音提醒定時器</h1>
+      <p class="text-xs text-slate-400 mt-1">支援分秒自訂排程與存檔</p>
+    </header>
+
+    <!-- 計時器主顯示區 -->
+    <div class="bg-slate-950/60 rounded-2xl border border-slate-800 p-6 flex flex-col items-center justify-center mb-6 shadow-inner">
+      <div id="timerDisplay" class="text-6xl md:text-7xl font-mono font-bold tracking-widest text-emerald-400 mb-2">
+        30:00
+      </div>
+      <div id="statusBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400">
+        準備中
+      </div>
+    </div>
+
+    <!-- 控制按鈕區 -->
+    <div class="flex items-center justify-center gap-3 mb-6">
+      <button id="startBtn" onclick="startTimer()" class="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-semibold shadow-lg transition">
+        ▶ 開始計時
+      </button>
+      <button id="pauseBtn" onclick="pauseTimer()" disabled class="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-semibold shadow-lg transition disabled:opacity-40 disabled:pointer-events-none">
+        ⏸ 暫停
+      </button>
+      <button id="resetBtn" onclick="resetTimer()" class="py-3 px-4 rounded-xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-slate-200 font-semibold shadow transition">
+        ↺ 重設
+      </button>
+    </div>
+
+    <!-- 語音引擎狀態指示列（鎖定 Google 國語（台灣）） -->
+    <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/80 mb-6 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="text-xs font-medium text-slate-300">發音引擎：</span>
+        <span id="voiceEngineStatus" class="text-xs font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800/40 px-2 py-0.5 rounded">
+          載入中...
+        </span>
+      </div>
+      <button onclick="testVoice()" class="whitespace-nowrap px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs font-medium rounded-lg text-slate-200 transition border border-slate-700">
+        🔊 測試語音
+      </button>
+    </div>
+
+    <!-- 設定檔管理模組 -->
+    <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-700/80 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+          <span>💾</span> 設定檔存檔管理
+        </h2>
+        <span class="text-[11px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">自動存檔已啟用</span>
+      </div>
+
+      <div class="flex items-center gap-2 mb-3">
+        <select id="presetSelect" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
+          <option value="">-- 選擇已儲存的設定檔 --</option>
+        </select>
+        <button onclick="loadSelectedPreset()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-xs font-medium rounded-lg text-slate-200 transition">
+          載入
+        </button>
+        <button onclick="deleteSelectedPreset()" class="px-2.5 py-2 bg-rose-900/40 hover:bg-rose-800/60 text-xs text-rose-300 rounded-lg transition" title="刪除選取設定檔">
+          🗑
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <input type="text" id="newPresetName" placeholder="輸入設定檔名稱（例如：打野專用）" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-emerald-500">
+        <button onclick="saveNewPreset()" class="whitespace-nowrap px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white rounded-lg transition">
+          另存設定檔
+        </button>
+      </div>
+    </div>
+
+    <!-- 參數設定區 -->
+    <div class="border-t border-slate-700/80 pt-6 space-y-6">
+      <!-- 總時長 -->
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-2">⏱ 總倒數時長</label>
+        <div class="flex items-center gap-2">
+          <div class="flex-1 flex items-center bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 focus-within:border-emerald-500">
+            <input type="number" id="totalMinInput" value="30" min="0" class="w-full bg-transparent text-white outline-none text-right font-mono">
+            <span class="text-slate-400 text-xs ml-1">分</span>
+          </div>
+          <div class="flex-1 flex items-center bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 focus-within:border-emerald-500">
+            <input type="number" id="totalSecInput" value="0" min="0" max="59" class="w-full bg-transparent text-white outline-none text-right font-mono">
+            <span class="text-slate-400 text-xs ml-1">秒</span>
+          </div>
+          <button onclick="applyTotalTime()" class="whitespace-nowrap px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-sm font-medium rounded-lg text-slate-200 transition">
+            套用
+          </button>
+        </div>
+      </div>
+
+      <!-- 新增提醒點 -->
+      <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-700/60">
+        <h2 class="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-1.5">
+          <span>🔔</span> 新增語音提醒節點
+        </h2>
+        
+        <div class="space-y-3 mb-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">倒數至剩餘時間：</label>
+            <div class="flex items-center gap-2">
+              <div class="flex-1 flex items-center bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 focus-within:border-emerald-500">
+                <input type="number" id="remindMinInput" placeholder="25" min="0" class="w-full bg-transparent text-sm text-white outline-none text-right font-mono">
+                <span class="text-slate-400 text-xs ml-1">分</span>
+              </div>
+              <div class="flex-1 flex items-center bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 focus-within:border-emerald-500">
+                <input type="number" id="remindSecInput" placeholder="0" min="0" max="59" class="w-full bg-transparent text-sm text-white outline-none text-right font-mono">
+                <span class="text-slate-400 text-xs ml-1">秒</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">語音播報文字：</label>
+            <input type="text" id="remindTextInput" placeholder="例如：要打野了" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-emerald-500">
+          </div>
+        </div>
+
+        <button onclick="addReminder()" class="w-full py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white text-sm font-medium rounded-lg shadow transition">
+          + 加入提醒排程
+        </button>
+      </div>
+
+      <!-- 提醒節點清單 -->
+      <div>
+        <div class="flex justify-between items-center mb-2">
+          <label class="text-sm font-medium text-slate-300">📋 已設定的提醒列表</label>
+          <span id="reminderCount" class="text-xs text-slate-400">0 個提醒</span>
+        </div>
+        <ul id="reminderList" class="space-y-2 max-h-52 overflow-y-auto pr-1"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY_AUTO = "GAS_TIMER_AUTO_SAVE";
+    const STORAGE_KEY_PRESETS = "GAS_TIMER_PRESETS";
+
+    let totalSeconds = 30 * 60;
+    let remainingSeconds = 30 * 60;
+    let timerId = null;
+    let isRunning = false;
+    let reminders = [];
+    let googleVoiceTW = null;
+
+    window.onload = () => {
+      loadAutoSavedData();
+      renderPresetDropdown();
+      updateDisplay();
+      renderReminders();
+      bindGoogleVoiceTW();
+    };
+
+    function formatTime(totalSec) {
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 1800);
+    }
+
+    // --- Google 國語（台灣）專用精準篩選模組 ---
+
+    function bindGoogleVoiceTW() {
+      if (!('speechSynthesis' in window)) {
+        document.getElementById('voiceEngineStatus').innerText = "瀏覽器不支援語音";
+        return;
+      }
+
+      const locateVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        if (!voices || voices.length === 0) return;
+
+        // 優先度 1：明確名稱包含 Google 與「國語」或「台灣/臺灣/TW」
+        googleVoiceTW = voices.find(v => 
+          v.name.includes("Google") && (v.name.includes("國語") || v.name.includes("台灣") || v.name.includes("臺灣"))
+        );
+
+        // 優先度 2：Google 引擎且語言標籤為台灣繁中 (zh-TW, cmn-TW, zh_TW)
+        if (!googleVoiceTW) {
+          googleVoiceTW = voices.find(v => 
+            v.name.includes("Google") && /(zh|cmn)[-_]TW/i.test(v.lang)
+          );
+        }
+
+        // 優先度 3：非 Chrome 環境或未含 Google 字樣時，回退到系統原生 zh-TW 繁中語音
+        if (!googleVoiceTW) {
+          googleVoiceTW = voices.find(v => /(zh|cmn)[-_]TW/i.test(v.lang));
+        }
+
+        const statusTag = document.getElementById('voiceEngineStatus');
+        if (googleVoiceTW) {
+          statusTag.innerText = googleVoiceTW.name;
+        } else {
+          statusTag.innerText = "系統預設繁中 (zh-TW)";
+        }
+      };
+
+      locateVoice();
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = locateVoice;
+      }
+    }
+
+    function testVoice() {
+      speakText("您好，這是 Google 國語（台灣）提醒語音。");
+    }
+
+    function speakText(text) {
+      if (!('speechSynthesis' in window)) {
+        alert("您的瀏覽器不支援語音合成功能");
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+
+      if (googleVoiceTW) {
+        utterance.voice = googleVoiceTW;
+        utterance.lang = googleVoiceTW.lang;
+      } else {
+        utterance.lang = 'zh-TW';
+      }
+
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    // --- 存檔與計時邏輯 ---
+
+    function autoSave() {
+      const data = {
+        totalSeconds: totalSeconds,
+        reminders: reminders.map(r => ({
+          id: r.id,
+          targetSeconds: r.targetSeconds,
+          min: r.min,
+          sec: r.sec,
+          text: r.text
+        }))
+      };
+      localStorage.setItem(STORAGE_KEY_AUTO, JSON.stringify(data));
+    }
+
+    function loadAutoSavedData() {
+      const raw = localStorage.getItem(STORAGE_KEY_AUTO);
+      if (raw) {
+        try {
+          const data = JSON.parse(raw);
+          if (data.totalSeconds) {
+            totalSeconds = data.totalSeconds;
+            remainingSeconds = totalSeconds;
+            document.getElementById('totalMinInput').value = Math.floor(totalSeconds / 60);
+            document.getElementById('totalSecInput').value = totalSeconds % 60;
+          }
+          if (Array.isArray(data.reminders)) {
+            reminders = data.reminders.map(r => ({ ...r, triggered: false }));
+          }
+        } catch (e) {
+          console.error("載入失敗", e);
+        }
+      } else {
+        reminders = [
+          { id: Date.now(), targetSeconds: 25 * 60, min: 25, sec: 0, text: "要打野了", triggered: false }
+        ];
+        autoSave();
+      }
+    }
+
+    function saveNewPreset() {
+      const nameInput = document.getElementById('newPresetName');
+      const name = nameInput.value.trim();
+      if (!name) {
+        alert("請輸入設定檔名稱！");
+        return;
+      }
+
+      let presets = JSON.parse(localStorage.getItem(STORAGE_KEY_PRESETS) || "{}");
+      presets[name] = {
+        totalSeconds: totalSeconds,
+        reminders: reminders.map(r => ({ ...r }))
+      };
+
+      localStorage.setItem(STORAGE_KEY_PRESETS, JSON.stringify(presets));
+      nameInput.value = "";
+      renderPresetDropdown();
+      document.getElementById('presetSelect').value = name;
+      showToast(`已儲存設定檔「${name}」`);
+    }
+
+    function loadSelectedPreset() {
+      if (isRunning) {
+        alert("計時進行中，請先暫停或重設！");
+        return;
+      }
+      const select = document.getElementById('presetSelect');
+      const name = select.value;
+      if (!name) {
+        alert("請先選擇要載入的設定檔！");
+        return;
+      }
+
+      const presets = JSON.parse(localStorage.getItem(STORAGE_KEY_PRESETS) || "{}");
+      if (presets[name]) {
+        const data = presets[name];
+        totalSeconds = data.totalSeconds;
+        remainingSeconds = totalSeconds;
+        document.getElementById('totalMinInput').value = Math.floor(totalSeconds / 60);
+        document.getElementById('totalSecInput').value = totalSeconds % 60;
+        reminders = data.reminders.map(r => ({ ...r, triggered: false }));
+
+        updateDisplay();
+        renderReminders();
+        autoSave();
+        showToast(`已成功載入「${name}」`);
+      }
+    }
+
+    function deleteSelectedPreset() {
+      const select = document.getElementById('presetSelect');
+      const name = select.value;
+      if (!name) return;
+
+      if (confirm(`確定要刪除「${name}」設定檔嗎？`)) {
+        let presets = JSON.parse(localStorage.getItem(STORAGE_KEY_PRESETS) || "{}");
+        delete presets[name];
+        localStorage.setItem(STORAGE_KEY_PRESETS, JSON.stringify(presets));
+        renderPresetDropdown();
+        showToast("已刪除設定檔");
+      }
+    }
+
+    function renderPresetDropdown() {
+      const select = document.getElementById('presetSelect');
+      const presets = JSON.parse(localStorage.getItem(STORAGE_KEY_PRESETS) || "{}");
+      select.innerHTML = '<option value="">-- 選擇已儲存的設定檔 --</option>';
+      Object.keys(presets).forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.innerText = name;
+        select.appendChild(opt);
+      });
+    }
+
+    function updateDisplay() {
+      document.getElementById('timerDisplay').innerText = formatTime(remainingSeconds);
+    }
+
+    function applyTotalTime() {
+      if (isRunning) {
+        alert("請先暫停或重設定時器後再更改總時長。");
+        return;
+      }
+      const min = parseInt(document.getElementById('totalMinInput').value, 10) || 0;
+      const sec = parseInt(document.getElementById('totalSecInput').value, 10) || 0;
+      const total = min * 60 + sec;
+
+      if (total <= 0) {
+        alert("總時長必須大於 0 秒");
+        return;
+      }
+
+      totalSeconds = total;
+      remainingSeconds = totalSeconds;
+      reminders.forEach(r => r.triggered = false);
+      renderReminders();
+      updateDisplay();
+      autoSave();
+      showToast("總時長已更新並儲存");
+    }
+
+    function startTimer() {
+      if (isRunning) return;
+
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+
+      isRunning = true;
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('startBtn').classList.add('opacity-40');
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('statusBadge').innerText = "計時中...";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+
+      timerId = setInterval(() => {
+        if (remainingSeconds > 0) {
+          remainingSeconds--;
+          updateDisplay();
+          checkReminders();
+        } else {
+          clearInterval(timerId);
+          isRunning = false;
+          document.getElementById('statusBadge').innerText = "計時已完成！";
+          document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30";
+          speakText("計時已結束！");
+          document.getElementById('startBtn').disabled = false;
+          document.getElementById('startBtn').classList.remove('opacity-40');
+          document.getElementById('pauseBtn').disabled = true;
+        }
+      }, 1000);
+    }
+
+    function checkReminders() {
+      reminders.forEach(reminder => {
+        if (!reminder.triggered && remainingSeconds === reminder.targetSeconds) {
+          reminder.triggered = true;
+          speakText(reminder.text);
+          renderReminders();
+        }
+      });
+    }
+
+    function pauseTimer() {
+      if (!isRunning) return;
+      clearInterval(timerId);
+      isRunning = false;
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('startBtn').classList.remove('opacity-40');
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('statusBadge').innerText = "已暫停";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30";
+    }
+
+    function resetTimer() {
+      clearInterval(timerId);
+      isRunning = false;
+      remainingSeconds = totalSeconds;
+      reminders.forEach(r => r.triggered = false);
+      updateDisplay();
+      renderReminders();
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('startBtn').classList.remove('opacity-40');
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('statusBadge').innerText = "準備中";
+      document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400";
+    }
+
+    function addReminder() {
+      const minInput = document.getElementById('remindMinInput');
+      const secInput = document.getElementById('remindSecInput');
+      const textInput = document.getElementById('remindTextInput');
+
+      const min = parseInt(minInput.value, 10) || 0;
+      const sec = parseInt(secInput.value, 10) || 0;
+      const text = textInput.value.trim();
+
+      if (min < 0 || sec < 0 || sec >= 60) {
+        alert("請輸入有效的時間（秒數需介於 0 至 59 之間）");
+        return;
+      }
+
+      const targetSec = min * 60 + sec;
+
+      if (targetSec > totalSeconds) {
+        alert(`提醒時間 (${formatTime(targetSec)}) 不能超過總時長 (${formatTime(totalSeconds)})！`);
+        return;
+      }
+
+      if (!text) {
+        alert("請輸入播報文字內容");
+        return;
+      }
+
+      reminders.push({
+        id: Date.now(),
+        targetSeconds: targetSec,
+        min: min,
+        sec: sec,
+        text: text,
+        triggered: remainingSeconds < targetSec
+      });
+
+      reminders.sort((a, b) => b.targetSeconds - a.targetSeconds);
+
+      minInput.value = '';
+      secInput.value = '';
+      textInput.value = '';
+      renderReminders();
+      autoSave();
+      showToast("已加入提醒並自動存檔");
+    }
+
+    function deleteReminder(id) {
+      reminders = reminders.filter(r => r.id !== id);
+      renderReminders();
+      autoSave();
+      showToast("已移除並更新存檔");
+    }
+
+    function renderReminders() {
+      const list = document.getElementById('reminderList');
+      const count = document.getElementById('reminderCount');
+      count.innerText = `${reminders.length} 個提醒`;
+
+      if (reminders.length === 0) {
+        list.innerHTML = `<li class="text-xs text-slate-500 text-center py-3 bg-slate-950/30 rounded-lg">尚無提醒項目</li>`;
+        return;
+      }
+
+      list.innerHTML = reminders.map(r => `
+        <li class="flex items-center justify-between p-2.5 rounded-lg border text-sm transition ${
+          r.triggered 
+            ? 'bg-slate-900/40 border-slate-800/80 text-slate-500 line-through' 
+            : 'bg-slate-900 border-slate-700 text-slate-200'
+        }">
+          <div class="flex items-center gap-2 overflow-hidden mr-2">
+            <span class="px-2 py-0.5 rounded text-xs font-mono font-medium ${r.triggered ? 'bg-slate-800 text-slate-500' : 'bg-emerald-500/20 text-emerald-400'}">
+              剩餘 ${formatTime(r.targetSeconds)}
+            </span>
+            <span class="truncate font-medium">${r.text}</span>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="speakText('${r.text.replace(/'/g, "\\'")}')" title="試聽語音" class="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition">
+              🔊 試聽
+            </button>
+            <button onclick="deleteReminder(${r.id})" title="刪除" class="p-1 hover:text-rose-400 text-slate-400 transition">
+              ✕
+            </button>
+          </div>
+        </li>
+      `).join('');
+    }
+  </script>
+</body>
+</html>

@@ -189,7 +189,20 @@
     }
 
     // --- Google 國語（台灣）專用精準篩選模組 ---
-
+    // 解鎖瀏覽器語音授權（送出一個 0 音量的空白發音）
+    function unlockAudio() {
+      if (!('speechSynthesis' in window)) return;
+      
+      // 建立一段空字串且音量為 0 的語音
+      const silentUtterance = new SpeechSynthesisUtterance(' ');
+      silentUtterance.volume = 0;
+      silentUtterance.rate = 10; // 極速帶過
+      window.speechSynthesis.speak(silentUtterance);
+    
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+        
     function bindGoogleVoiceTW() {
       if (!('speechSynthesis' in window)) {
         document.getElementById('voiceEngineStatus').innerText = "瀏覽器不支援語音";
@@ -401,18 +414,17 @@
 
     function startTimer() {
       if (isRunning) return;
-
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-
+    
+      // 1. 點擊當下立即解鎖語音引擎，避免後續倒數結束時被瀏覽器攔截
+      unlockAudio();
+    
       isRunning = true;
       document.getElementById('startBtn').disabled = true;
       document.getElementById('startBtn').classList.add('opacity-40');
       document.getElementById('pauseBtn').disabled = false;
       document.getElementById('statusBadge').innerText = "計時中...";
       document.getElementById('statusBadge').className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
-
+    
       timerId = setInterval(() => {
         if (remainingSeconds > 0) {
           remainingSeconds--;

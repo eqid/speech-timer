@@ -412,6 +412,22 @@
       showToast("總時長已更新並儲存");
     }
 
+    // 解鎖瀏覽器語音授權（送出一個 0 音量的空白發音）
+    function unlockAudio() {
+      if (!('speechSynthesis' in window)) return;
+      
+      // 建立一段空字串且音量為 0 的語音
+      const silentUtterance = new SpeechSynthesisUtterance(' ');
+      silentUtterance.volume = 0;
+      silentUtterance.rate = 10; // 極速帶過
+      window.speechSynthesis.speak(silentUtterance);
+    
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    }
+    
+    // 修改後的開始計時函式
     function startTimer() {
       if (isRunning) return;
     
